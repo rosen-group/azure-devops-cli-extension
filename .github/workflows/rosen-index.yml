@@ -1,0 +1,52 @@
+name: rosen-index
+
+# Publishes index.json (Microsoft's official index with 'azure-devops' replaced by this fork) to GitHub Pages.
+# Daily schedule keeps all other extensions current.
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download fork wheels from releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p site wheels
+          for tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName'); do
+            gh release download "$tag" --pattern '*.whl' --dir wheels --clobber
+          done
+          ls wheels
+      - name: Build merged index
+        run: |
+          args=()
+          for w in wheels/*.whl; do
+            v=$(basename "$w" | sed -E 's/^azure_devops-(.+)-py2.*/\1/')
+            args+=("https://github.com/${GITHUB_REPOSITORY}/releases/download/v${v}/$(basename "$w")" "$w")
+          done
+          python .github/scripts/build_index.py site/index.json "${args[@]}"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

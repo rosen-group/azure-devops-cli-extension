@@ -32,6 +32,7 @@ from .git import get_remote_url
 from .vsts_git_url_info import VstsGitUrlInfo
 from .uri import (canonicalize_azure_devops_organization_url,
                   uri_parse_instance_from_git_uri,
+                  is_onprem_organization_url,
                   is_valid_url)
 from .uuid import is_uuid
 from .telemetry import vsts_tracking_data, init_telemetry
@@ -39,11 +40,17 @@ from .telemetry import vsts_tracking_data, init_telemetry
 logger = get_logger(__name__)
 
 
+def _cloud_only_error():
+    return CLIError('The Azure DevOps CLI extension works only with Azure DevOps Services (cloud). '
+                    'It doesn\'t support Azure DevOps Server (on-premises) unless the host is listed in the '
+                    'AZURE_DEVOPS_EXT_ONPREM_HOSTS environment variable (comma-separated host names) and the '
+                    'organization URL is passed explicitly, e.g. https://<host>/tfs/<collection>.')
+
+
 def get_connection(organization):
     organization = canonicalize_azure_devops_organization_url(organization)
     if organization is None:
-        raise CLIError('The Azure DevOps CLI extension works only with Azure DevOps Services (cloud). '
-                       'It doesn\'t support Azure DevOps Server (on-premises).')
+        raise _cloud_only_error()
     organization = organization.lower()
     if organization not in _connection:
         credentials = _get_credentials(organization)
@@ -124,6 +131,10 @@ def get_default_subscription_info():
 
 
 def get_token_from_az_logins(organization, pat_token_present):
+    # Never send Entra/az login tokens to Azure DevOps Server hosts; they authenticate with a PAT only.
+    if is_onprem_organization_url(organization):
+        logger.debug('Skipping az login token for allowlisted Azure DevOps Server host.')
+        return ''
     profile = Profile()
     dummy_user = profile.get_current_account_user()     # noqa: F841
     subscriptions = profile.load_cached_subscriptions(False)
@@ -379,8 +390,7 @@ def resolve_instance_project_and_repo(
     if not is_valid_url(organization):
         raise _team_organization_arg_error()
     if not check_organization_in_azure(organization):
-        raise CLIError('The Azure DevOps CLI extension works only with Azure DevOps Services (cloud). '
-                       'It doesn\'t support Azure DevOps Server (on-premises).')
+        raise _cloud_only_error()
     if project_required and project is None:
         _raise_team_project_arg_error()
     if repo_required and repo is None:

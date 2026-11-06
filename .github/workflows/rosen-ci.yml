@@ -1,0 +1,32 @@
+name: rosen-ci
+
+on:
+  pull_request:
+  push:
+    branches: [rosen/main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Azure CLI and test dependencies
+        run: python -m pip install azure-cli keyring
+      - name: Unit tests (common)
+        working-directory: azure-devops
+        run: python -m unittest discover -s azext_devops/tests/latest/common -t . -p "test_*.py"
+      - name: Build wheel
+        working-directory: azure-devops
+        run: python -m pip wheel . --no-deps -w ../dist
+      - name: Check wheel installs into Azure CLI
+        run: |
+          az extension add --source dist/azure_devops-*.whl --yes
+          az extension show --name azure-devops --query version -o tsv
+          az devops -h

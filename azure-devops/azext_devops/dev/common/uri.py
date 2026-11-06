@@ -9,8 +9,11 @@ except ImportError:
     from urllib import quote
     from urlparse import urlparse
 
+import os
 import re
 from collections import namedtuple
+
+ONPREM_HOSTS_ENV_VARIABLE_NAME = 'AZURE_DEVOPS_EXT_ONPREM_HOSTS'
 
 
 AzureDevOpsGitRemote = namedtuple(
@@ -19,6 +22,7 @@ AzureDevOpsGitRemote = namedtuple(
 
 _UNSAFE_URL_CHARACTERS = re.compile(r'[\x00-\x20\x7f\\]')
 _SAFE_USERINFO = re.compile(r'^[A-Za-z0-9._-]+$')
+_SAFE_PATH_SEGMENT = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
 _SAFE_HOST_LABEL = re.compile(r'^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$')
 
 
@@ -58,11 +62,15 @@ def canonicalize_azure_devops_organization_url(url):  # pylint: disable=too-many
         return git_remote.organization_url
 
     # Explicit --organization values use a narrower grammar than general service URLs.
-    parsed_url = _parse_safe_https_url(url, allow_userinfo=False)
+    onprem_hosts = get_allowed_onprem_hosts()
+    parsed_url = _parse_safe_https_url(url, allow_userinfo=False, extra_hosts=onprem_hosts)
     if parsed_url is None:
         return None
 
     host, path_segments = parsed_url
+    if host in onprem_hosts:
+        return _canonicalize_onprem_organization_url(host, path_segments)
+
     if host == 'dev.azure.com' or _is_dev_azure_service_host(host):
         if len(path_segments) != 1:
             return None
@@ -71,6 +79,36 @@ def canonicalize_azure_devops_organization_url(url):  # pylint: disable=too-many
     if _is_visualstudio_host(host) and not path_segments:
         return 'https://{host}/'.format(host=host)
     return None
+
+
+def get_allowed_onprem_hosts():
+    """Exact lowercase hostnames of Azure DevOps Server instances explicitly allowed by the user (ROSEN fork)."""
+    hosts = set()
+    for entry in os.environ.get(ONPREM_HOSTS_ENV_VARIABLE_NAME, '').split(','):
+        entry = entry.strip().lower()
+        labels = entry.split('.')
+        if len(labels) >= 2 and all(_is_safe_host_label(label) for label in labels) and \
+                not is_azure_devops_host(entry):
+            hosts.add(entry)
+    return hosts
+
+
+def is_onprem_organization_url(url):
+    """True if the URL canonicalizes to an allowlisted Azure DevOps Server host."""
+    canonical = canonicalize_azure_devops_organization_url(url)
+    if canonical is None:
+        return False
+    parsed = _parse_safe_https_url(canonical, allow_userinfo=False, extra_hosts=get_allowed_onprem_hosts())
+    return parsed is not None and parsed[0] in get_allowed_onprem_hosts()
+
+
+def _canonicalize_onprem_organization_url(host, path_segments):
+    # Accepted: https://<host>/<collection> or https://<host>/<virtual-dir>/<collection>
+    if not 1 <= len(path_segments) <= 2:
+        return None
+    if not all(_SAFE_PATH_SEGMENT.match(segment) and segment not in ('.', '..') for segment in path_segments):
+        return None
+    return 'https://{host}/{path}'.format(host=host, path='/'.join(path_segments))
 
 
 def organization_url_from_azure_devops_url(url):
@@ -213,7 +251,7 @@ def _parse_azure_devops_ssh_git_remote(remote_url):  # pylint: disable=too-many-
     return AzureDevOpsGitRemote(repository_url, organization_url, https_host)
 
 
-def _parse_safe_https_url(url, allow_userinfo):  # pylint: disable=too-many-return-statements
+def _parse_safe_https_url(url, allow_userinfo, extra_hosts=()):  # pylint: disable=too-many-return-statements
     if _UNSAFE_URL_CHARACTERS.search(url):
         return None
 
@@ -243,7 +281,7 @@ def _parse_safe_https_url(url, allow_userinfo):  # pylint: disable=too-many-retu
         host = authority
 
     host = host.lower()
-    if not is_azure_devops_host(host):
+    if not is_azure_devops_host(host) and host not in extra_hosts:
         return None
 
     path = match.group(2) or ''

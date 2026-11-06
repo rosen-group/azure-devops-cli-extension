@@ -1,0 +1,44 @@
+name: rosen-upstream-check
+
+# Weekly: open an issue when upstream has new commits/tags not yet merged into rosen/main.
+on:
+  schedule:
+    - cron: '23 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Compare with upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git remote add upstream https://github.com/Azure/azure-devops-cli-extension.git
+          git fetch --quiet upstream master
+          base=$(sed -n 's/^VERSION = "\(.*\)\.post[0-9]*"/\1/p' azure-devops/azext_devops/version.py)
+          # Upstream publishes GitHub Releases ("... for Azure CLI X.Y.Z") tagged with a date; the tag is the release commit.
+          release=$(gh release list -R Azure/azure-devops-cli-extension --exclude-drafts --exclude-pre-releases --limit 1 --json name,tagName --jq '.[0] | "\(.name)|\(.tagName)"')
+          released=$(echo "$release" | sed -E 's/.* ([0-9.]+)\|.*/\1/')
+          tag=${release##*|}
+          unreleased=$(git log --oneline HEAD..upstream/master -- azure-devops | grep -v 'Post-Release' | head -30 || true)
+          echo "base=$base released=$released tag=$tag"
+          if [ "$base" != "$released" ]; then
+            title="New upstream release $released (fork is based on $base)"
+            if [ -z "$(gh issue list --state open --search "$title in:title" --json number --jq '.[].number')" ]; then
+              gh label create upstream-update --color 0e8a16 --description "New upstream release to merge into the fork" 2>/dev/null || true
+              gh issue create --label upstream-update --title "$title" --body "@rosen-group/azure-devops-cli-extension-maintainers Upstream released azure-devops $released (tag $tag = release commit).
+
+          Follow ROSEN-UPSTREAM-UPDATE.md: review the upstream diff for security fixes, merge the tag into a work branch, set the version to ${released}.post1, open a PR, run the manual test matrix and then tag v${released}.post1. A coding agent can prepare the PR (steps 1 to 6).
+
+          Unreleased upstream master commits (information only):
+          $unreleased"
+            fi
+          fi
