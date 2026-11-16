@@ -3,7 +3,7 @@
 For maintainers and for coding agents. Triggered by an issue titled "New upstream release X (fork is based on Y)"
 (label `upstream-update`, opened weekly by `rosen-upstream-check`). Background and policies: `ROSEN-FORK.md`.
 
-Current base: upstream release `1.0.10` = upstream tag `20261015.1` (commit `429a129`). Update this line in the PR.
+Current base: upstream release `1.0.11` = upstream tag `20261109.1` (commit `2ee443d`). Update this line in the PR.
 
 ## Rules
 
